@@ -18,6 +18,6 @@ if ! [ -d ${READDIR} ]; then
 fi
 
 FILES=$(grep -c ${READSTR} ${READDIR}/* | wc -l)
-LINES=$(grep -0 ${READSTR} ${READDIR}/* | wc -l)
+LINES=$(grep -o ${READSTR} ${READDIR}/* | wc -l)
 
 echo "The number of files are ${FILES} and the number of matching lines are ${LINES}"
