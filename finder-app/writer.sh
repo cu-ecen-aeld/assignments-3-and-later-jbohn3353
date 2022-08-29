@@ -4,13 +4,13 @@
 # ./writer.sh [filePath] [string]
 # Author: James Bohn
 
-WRITEFILE=$1
-WRITESTR=$2
-
 if [ $# -lt 2 ]; then
     echo "Not enough arguments."
     exit 1
 fi
+
+WRITEFILE=$1
+WRITESTR=$2
 
 WRITEDIR=$(dirname ${WRITEFILE})
 

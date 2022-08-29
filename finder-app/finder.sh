@@ -4,13 +4,13 @@
 # ./finder.sh [dir] [string]
 # Author: James Bohn
 
-READDIR=$1
-READSTR=$2
-
 if [ $# -lt 2 ]; then
     echo "Not enough arguments."
     exit 1
 fi
+
+READDIR=$1
+READSTR=$2
 
 if ! [ -d ${READDIR} ]; then
     echo "Invalid search directory."
