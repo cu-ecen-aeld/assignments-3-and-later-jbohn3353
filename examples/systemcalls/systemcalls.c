@@ -59,22 +59,26 @@ bool do_exec(int count, ...)
 */
     pid = fork();
     if(pid == -1){ 
+        va_end(args);
         return false;
     }
     else if(pid == 0) {
         execv(command[0], command);
         
-        exit(1);
+        // If we made it past the execv() call without being taken over then exit
+        // with an error
+        exit(-1);
     }
 
     while(wait(&status) != pid);
     
-    if(!WIFEXITED(status) || !!WEXITSTATUS(status)){
+    // Check if we did not exit normally OR if we exited with a non zero status
+    if(!WIFEXITED(status) || WEXITSTATUS(status)){
+        va_end(args);
         return false;
     }
 
     va_end(args);
-
     return true;
 }
 
@@ -116,15 +120,16 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
 
         status = execv(command[0], command);
 
-        exit(1);
+        exit(-1);
     }
 
     close(fd);
 
-    if(waitpid(pid, &status, 0) == -1){
-        return false;
-    }
-    else if(!WIFEXITED(status) || !!WEXITSTATUS(status)){
+    while(wait(&status) != pid);
+    
+    // Check if we did not exit normally OR if we exited with a non zero status
+    if(!WIFEXITED(status) || WEXITSTATUS(status)){
+        va_end(args);
         return false;
     }
 
