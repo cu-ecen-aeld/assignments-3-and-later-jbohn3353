@@ -62,9 +62,7 @@ bool do_exec(int count, ...)
         return false;
     }
     else if(pid == 0) {
-        execv(command[0], &command[1]);
-
-        printf("%s\n", strerror(errno));
+        execv(command[0], command);
         
         exit(1);
     }
@@ -74,8 +72,6 @@ bool do_exec(int count, ...)
     if(!WIFEXITED(status) || !!WEXITSTATUS(status)){
         return false;
     }
-
-    printf("Exited: %d, Status: %d\n", WIFEXITED(status), WEXITSTATUS(status));
 
     va_end(args);
 
@@ -100,10 +96,6 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
-
 
 /*
  * TODO
@@ -122,7 +114,7 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
         if(dup2(fd, 1) < 0) exit(-1);
         close(fd);
 
-        status = execv(command[0], &command[1]);
+        status = execv(command[0], command);
 
         exit(1);
     }
@@ -135,8 +127,6 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
     else if(!WIFEXITED(status) || !!WEXITSTATUS(status)){
         return false;
     }
-
-    printf("Exited: %d, Status: %d\n", WIFEXITED(status), WEXITSTATUS(status));
 
     va_end(args);
 
