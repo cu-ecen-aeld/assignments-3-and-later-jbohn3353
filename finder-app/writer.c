@@ -1,3 +1,8 @@
+// Creates a file and writes a string to it
+// Usage:
+// ./writer [filePath] [string]
+// Author: James Bohn
+
 #include <syslog.h>
 #include <fcntl.h>
 #include <errno.h>
