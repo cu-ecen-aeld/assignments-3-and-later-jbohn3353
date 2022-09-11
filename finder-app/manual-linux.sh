@@ -112,8 +112,9 @@ sudo cp writer ${OUTDIR}/rootfs/home
 
 # TODO: Copy the finder related scripts and executables to the /home directory
 # on the target rootfs
+mkdir ${OUTDIR}/rootfs/home/conf
 sudo cp finder.sh ${OUTDIR}/rootfs/home
-sudo cp conf/username.txt ${OUTDIR}/rootfs/home
+sudo cp conf/username.txt ${OUTDIR}/rootfs/home/conf
 sudo cp finder-test.sh ${OUTDIR}/rootfs/home
 sudo cp autorun-qemu.sh ${OUTDIR}/rootfs/home
 
