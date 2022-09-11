@@ -81,8 +81,7 @@ fi
 
 # TODO: Make and install busybox
 make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE}
-make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} install
-cp busybox ${OUTDIR}/rootfs/bin
+make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} CONFIG_PREFIX=${OUTDIR}/rootfs install
 
 echo "Library dependencies"
 cd "$OUTDIR/rootfs"
@@ -104,10 +103,6 @@ cp -a $SYSROOT/lib64/libc-2.31.so lib64
 # TODO: Make device nodes
 sudo mknod -m 666 dev/null c 1 3
 sudo mknod -m 600 dev/console c 5 1
-
-# Install Modules
-cd "$OUTDIR/linux-stable"
-sudo make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} INSTALL_MOD_PATH=${OUTDIR}/rootfs modules_install
 
 # TODO: Clean and build the writer utility
 cd "$FINDER_APP_DIR"
