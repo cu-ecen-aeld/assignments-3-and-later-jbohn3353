@@ -17,7 +17,7 @@ bool do_system(const char *cmd)
  *   or false() if it returned a failure
 */
 
-    return true;
+    return !system(cmd);
 }
 
 /**
@@ -40,14 +40,13 @@ bool do_exec(int count, ...)
     va_start(args, count);
     char * command[count+1];
     int i;
+    int status;
+    pid_t pid;
     for(i=0; i<count; i++)
     {
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
 
 /*
  * TODO:
@@ -58,9 +57,28 @@ bool do_exec(int count, ...)
  *   as second argument to the execv() command.
  *
 */
+    pid = fork();
+    if(pid == -1){ 
+        va_end(args);
+        return false;
+    }
+    else if(pid == 0) {
+        execv(command[0], command);
+        
+        // If we made it past the execv() call without being taken over then exit
+        // with an error
+        exit(-1);
+    }
+
+    while(wait(&status) != pid);
+    
+    // Check if we did not exit normally OR if we exited with a non zero status
+    if(!WIFEXITED(status) || WEXITSTATUS(status)){
+        va_end(args);
+        return false;
+    }
 
     va_end(args);
-
     return true;
 }
 
@@ -75,15 +93,13 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
     va_start(args, count);
     char * command[count+1];
     int i;
+    pid_t pid;
+    int status;
     for(i=0; i<count; i++)
     {
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
-
 
 /*
  * TODO
@@ -92,6 +108,30 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *   The rest of the behaviour is same as do_exec()
  *
 */
+    int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
+
+    pid = fork();
+    if(pid == -1){ 
+        return false;
+    }
+    else if(pid == 0) {
+        if(dup2(fd, 1) < 0) exit(-1);
+        close(fd);
+
+        status = execv(command[0], command);
+
+        exit(-1);
+    }
+
+    close(fd);
+
+    while(wait(&status) != pid);
+    
+    // Check if we did not exit normally OR if we exited with a non zero status
+    if(!WIFEXITED(status) || WEXITSTATUS(status)){
+        va_end(args);
+        return false;
+    }
 
     va_end(args);
 
