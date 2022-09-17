@@ -10,6 +10,8 @@ WRITESTR=AELD_IS_FUN
 WRITEDIR=/tmp/aeld-data
 username=$(cat conf/username.txt)
 
+PATH=$PATH:.
+
 if [ $# -lt 2 ]
 then
 	echo "Using default value ${WRITESTR} for string to write"
@@ -46,7 +48,7 @@ do
 	./writer "$WRITEDIR/${username}$i.txt" "$WRITESTR"
 done
 
-OUTPUTSTRING=$(./finder.sh "$WRITEDIR" "$WRITESTR")
+OUTPUTSTRING=$(./finder.sh "$WRITEDIR" "$WRITESTR" > /tmp/assignment4-result.txt)
 
 set +e
 echo ${OUTPUTSTRING} | grep "${MATCHSTR}"
