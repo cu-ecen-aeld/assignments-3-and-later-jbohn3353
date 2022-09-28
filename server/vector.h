@@ -1,3 +1,6 @@
+// Simple monotonic dynamic array
+// Author: James Bohn
+
 #include <stdio.h>
 
 #define VECTOR_BASE_SIZE 4096

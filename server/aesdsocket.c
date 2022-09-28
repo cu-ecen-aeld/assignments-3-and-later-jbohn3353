@@ -1,9 +1,9 @@
-/*
-** server.c -- a stream socket server demo
-*/
-
-// TODO:
-// Comments
+// Simple system call socket server
+// Usage:
+// ./aesdsocket [-d]
+//				daemon mode, forks and runs in background
+// Author: James Bohn
+// Adapted from Beej's guide (https://beej.us/guide/bgnet/html/)
 
 #include <stdio.h>
 #include <stdlib.h>

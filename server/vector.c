@@ -1,3 +1,6 @@
+// Simple monotonic dynamic array
+// Author: James Bohn
+
 #include "vector.h"
 #include <stdlib.h>
 #include <string.h>
