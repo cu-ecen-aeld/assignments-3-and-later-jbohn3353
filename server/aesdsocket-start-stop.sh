@@ -7,11 +7,11 @@
 case "$1" in
     start)
         echo "Starting aesdsocket in daemon mode"
-        start-stop-daemon --start --name aesdsocket -startas /usr/bin/aesdsocket
+        start-stop-daemon -S -n aesdsocket -x /usr/bin/aesdsocket
         ;;
     stop)
         echo "Stopping aesdsocket"
-        start-stop-daemon --stop --name aesdsocket
+        start-stop-daemon -K -n aesdsocket
         ;;
     *)
         echo "Usage: $0 {start|stop}"
