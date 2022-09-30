@@ -89,6 +89,7 @@ int main(int argc, char **argv) {
 	vector line_vec;
 	char read_char;
 	int flags;
+	pid_t pid;
 
 	openlog("server_log", LOG_CONS | LOG_NDELAY, LOG_USER);
 
@@ -142,9 +143,38 @@ int main(int argc, char **argv) {
 	}
 
 	// Close fd and exit if in daemon mode and this is the parent
-	if(argc > 1 && !strcmp(argv[1], "-d") && fork()){
-		close(sockfd);
-		exit(0);
+	if(argc > 1 && !strcmp(argv[1], "-d")){
+		pid = fork();
+		if(pid == -1) {
+			syslog(LOG_ERR, "error on syscall: fork");
+			return -1;
+		}
+		// parent process
+		else if(pid > 0) {
+			close(sockfd);
+			exit(0);
+		}
+		// child process
+		else {
+
+			// Create new session + process group so we don't get sigs from term
+			if(setsid() == -1) {
+				syslog(LOG_ERR, "error on syscall: setsid");
+				return -1;
+			}
+
+			// Prevent working directory being unmounted by making it root
+			if(chdir("/") == -1) {
+				syslog(LOG_ERR, "error on syscall: chdir");
+				return -1;
+			}
+
+			// Redirect stdin, stdout, and stderror to /dev/null
+			open("/dev/null", O_RDWR);
+			dup(0);
+			dup(0);
+		}
+
 	}
 
 	freeaddrinfo(servinfo); // all done with this structure
