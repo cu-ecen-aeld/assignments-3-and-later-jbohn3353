@@ -15,6 +15,8 @@ OBJS := $(SRCS:%=$(BUILD_DIR)/%.o)
 CC = $(CROSS_COMPILE)gcc
 CFLAGS = -Wall -Werror -g -O0
 
+all: $(TARGET_EXEC)
+
 # The final build step.
 $(TARGET_EXEC): $(OBJS)
 	$(CC) $(OBJS) -o $@ $(LDFLAGS)
