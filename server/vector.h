@@ -13,4 +13,6 @@ typedef struct {
 
 int vector_init(vector *vec);
 int vector_append(vector *vec, void *data, size_t len);
+void *vector_find(vector *vec, int offset, char token);
+void vector_carryover(vector *vec, int used);
 void vector_close(vector *vec);

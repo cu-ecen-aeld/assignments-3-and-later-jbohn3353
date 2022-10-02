@@ -47,11 +47,35 @@ int vector_append(vector *vec, void *data, size_t len){
     return 0;
 }
 
+/// @brief carryover unused vector data by softrestting
+/// @param vec pointer to vector object to do work on
+/// @param used # of used bytes in the buffer to discard
+void vector_carryover(vector *vec, int used){
+    memcpy(vec->buf, vec->buf + used, vec->len - used);
+    vec->len = vec->len - used;
+}
+
+/// @brief find the first instance of a token byte in a vector's buffer
+/// @param vec pointer to vector object to do work on
+/// @param offset offset to start the search from in the buffer
+/// @param token token/byte to search for
+/// @return pointer to first found token, NULL if not found
+void *vector_find(vector *vec, int offset, char token){
+    for(int i = offset; i < vec->len; i++){
+        if(*(char *)(vec->buf + i) == token){
+            return vec->buf + i;
+        }
+    }
+
+    return NULL;
+}
+
 /// @brief Free's memory associated with vector and marks it unusable until
 ///        reinitialized
 /// @param vec pointer to vector to close
 void vector_close(vector *vec){
     free(vec->buf);
+    vec->buf = NULL;
     vec->len = 0;
     vec->cap = 0;
 }
