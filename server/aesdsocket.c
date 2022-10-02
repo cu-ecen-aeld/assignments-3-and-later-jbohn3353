@@ -28,6 +28,17 @@
 
 #define BACKLOG 10	 // how many pending connections queue will hold
 
+// Struct holding fd's to close and pointers to memory/structs to free
+struct cleanup_data {
+	struct addrinfo *servinfo;
+	int sock_fd;
+	int new_fd;
+	int data_fd;
+
+	vector *recv_vec;
+	vector *send_vec;
+};
+
 static bool sig_received = false;
 
 void sig_handler(int s) {
@@ -43,53 +54,48 @@ void *get_in_addr(struct sockaddr *sa) {
 	return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
-/// @brief Fill a full line of data (terminated by \n) into a provided vector
-///		   from a provided socket
-/// @param client_fd the socket to read data from
-/// @param line_vec the vector to put the data into
-/// @return length of line if line is terminated, 0 if connection was terminated
-///			-1 if there was a failure
-int fill_line(int client_fd, vector *line_vec){
-	ssize_t received = 0; 
-	char recv_buf[CHUNK_SIZE];
-
-	while(!strchr(line_vec->buf + line_vec->len - received, '\n')){
-
-		// Perform non-blocking receive
-		do {
-			received = recv(client_fd, recv_buf, CHUNK_SIZE, 0);
-		} while (received == -1 && errno == EAGAIN);
-
-		if(received == -1) {
-			syslog(LOG_ERR, "error on syscall: recv");
-			return -1;
-		}
-		else if(received > 0){
-			if(vector_append(line_vec, recv_buf, received)){
-				return -1;
-			}
-		}
-		else {
-			return 0;
-		}
-	}
-
-	return line_vec->len;
+/// @brief Close/free all open system resources
+/// @param cd pointer to struct holding all the things to cleanup
+void cleanup(struct cleanup_data *cd){
+	freeaddrinfo(cd->servinfo);
+	close(cd->sock_fd);
+	close(cd->new_fd);
+	close(cd->data_fd);
+	vector_close(cd->recv_vec);
+	vector_close(cd->send_vec);
+	closelog();
 }
 
 int main(int argc, char **argv) {
-	int sockfd, new_fd;  // listen on sock_fd, new connection on new_fd
-	struct addrinfo hints, *servinfo, *p;
+	int sock_fd=0; // listen on sock_fd
+	int new_fd=0; // new connections on new_fd
+	int data_fd=0; // data file
+	struct addrinfo hints, *servinfo=NULL, *p;
 	struct sockaddr_storage their_addr; // connector's address information
 	struct sigaction sa;
 	socklen_t sin_size;
 	int yes=1;
 	char s[INET6_ADDRSTRLEN];
+	char recv_buf[CHUNK_SIZE];
+	char *new_line;
 	int rv;
-	vector line_vec;
+	int received;
+	int written;
+	vector recv_vec, send_vec;
 	char read_char;
 	int flags;
 	pid_t pid;
+
+	// setup stuff to cleanup
+	struct cleanup_data cd;
+	recv_vec.buf = NULL;
+	send_vec.buf = NULL;
+	cd.servinfo = servinfo;
+	cd.sock_fd = sock_fd;
+	cd.new_fd = new_fd;
+	cd.data_fd = data_fd;
+	cd.recv_vec = &recv_vec;
+	cd.send_vec= &send_vec;
 
 	openlog("server_log", LOG_CONS | LOG_NDELAY, LOG_USER);
 
@@ -99,11 +105,13 @@ int main(int argc, char **argv) {
 	sa.sa_flags = SA_RESTART;
 	if (sigaction(SIGINT, &sa, NULL) == -1) {
 		syslog(LOG_ERR, "error on syscall: sigaction");
-		exit(-1);
+		cleanup(&cd);
+		return -1;
 	}
 	if (sigaction(SIGTERM, &sa, NULL) == -1) {
 		syslog(LOG_ERR, "error on syscall: sigaction");
-		exit(-1);
+		cleanup(&cd);
+		return -1;
 	}
 
 	memset(&hints, 0, sizeof(hints));
@@ -113,24 +121,26 @@ int main(int argc, char **argv) {
 
 	if ((rv = getaddrinfo(NULL, PORT, &hints, &servinfo)) != 0) {
 		syslog(LOG_ERR, "getaddrinfo: %s\n", gai_strerror(rv));
+		cleanup(&cd);
 		return -1;
 	}
 
 	// loop through all the results and bind to the first we can
 	for(p = servinfo; p != NULL; p = p->ai_next) {
-		if ((sockfd = socket(p->ai_family, p->ai_socktype,
+		if ((sock_fd = socket(p->ai_family, p->ai_socktype,
 				p->ai_protocol)) == -1) {
 			continue;
 		}
 
-		if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes,
+		if (setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, &yes,
 				sizeof(int)) == -1) {
 			syslog(LOG_ERR, "error on syscall: setsockopt");
-			exit(1);
+			cleanup(&cd);
+			return -1;
 		}
 
-		if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
-			close(sockfd);
+		if (bind(sock_fd, p->ai_addr, p->ai_addrlen) == -1) {
+			close(sock_fd);
 			continue;
 		}
 
@@ -139,19 +149,21 @@ int main(int argc, char **argv) {
 
 	if (p == NULL)  {
 		syslog(LOG_ERR, "failed to bind\n");
+		cleanup(&cd);
 		return -1;
 	}
 
-	// Close fd and exit if in daemon mode and this is the parent
+	// Close fd and exit if in daemon mode
 	if(argc > 1 && !strcmp(argv[1], "-d")){
 		pid = fork();
 		if(pid == -1) {
 			syslog(LOG_ERR, "error on syscall: fork");
+			cleanup(&cd);
 			return -1;
 		}
 		// parent process
 		else if(pid > 0) {
-			close(sockfd);
+			cleanup(&cd);
 			exit(0);
 		}
 		// child process
@@ -160,12 +172,14 @@ int main(int argc, char **argv) {
 			// Create new session + process group so we don't get sigs from term
 			if(setsid() == -1) {
 				syslog(LOG_ERR, "error on syscall: setsid");
+				cleanup(&cd);
 				return -1;
 			}
 
 			// Prevent working directory being unmounted by making it root
 			if(chdir("/") == -1) {
 				syslog(LOG_ERR, "error on syscall: chdir");
+				cleanup(&cd);
 				return -1;
 			}
 
@@ -178,38 +192,43 @@ int main(int argc, char **argv) {
 	}
 
 	freeaddrinfo(servinfo); // all done with this structure
+	servinfo = NULL;
 
-	flags = fcntl(sockfd, F_GETFL);
+	flags = fcntl(sock_fd, F_GETFL);
 	if(flags == -1) {
 		syslog(LOG_ERR, "error on syscall: fcntl");
+		cleanup(&cd);
 		return -1;
 	}
-	if(fcntl(sockfd, F_SETFL, flags | O_NONBLOCK) == -1) {
+	if(fcntl(sock_fd, F_SETFL, flags | O_NONBLOCK) == -1) {
 		syslog(LOG_ERR, "error on syscall: fcntl");
+		cleanup(&cd);
 		return -1;		
 	}
 
 	// Start listening for new client connections
-	if (listen(sockfd, BACKLOG) == -1) {
+	if (listen(sock_fd, BACKLOG) == -1) {
 		syslog(LOG_ERR, "error on syscall: listen");
+		cleanup(&cd);
 		return -1;
 	}
 
 	// Create/wipe data file
-	int data_fd = open(DATA_FILE, O_CREAT | O_RDWR | O_TRUNC,0644);
+	data_fd = open(DATA_FILE, O_CREAT | O_RDWR | O_TRUNC,0644);
 	if(data_fd == -1) {
 		syslog(LOG_ERR, "error creating data file");
+		cleanup(&cd);
 		return -1;
 	}
 
 	syslog(LOG_DEBUG, "waiting for connections...\n");
 
 	while(!sig_received) {  // main accept() loop
-		// Accept new client connection
 		sin_size = sizeof(their_addr);
 
+		// Handle non-blocking accept
 		do {
-			new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
+			new_fd = accept(sock_fd, (struct sockaddr *)&their_addr, &sin_size);
 		} while (new_fd == -1 && errno == EAGAIN && !sig_received);
 		if(new_fd == -1) {
 			if(sig_received) {
@@ -217,6 +236,7 @@ int main(int argc, char **argv) {
 			}
 			else {
 				syslog(LOG_ERR, "error on syscall: accept");
+				cleanup(&cd);
 				return -1;				
 			}
 		}
@@ -226,53 +246,91 @@ int main(int argc, char **argv) {
 			get_in_addr((struct sockaddr *)&their_addr),
 			s, sizeof(s));
 		syslog(LOG_DEBUG, "Accepted connection from %s\n", s);
+
+		// Clear receive buffer to prepare for receive
+		if(vector_init(&recv_vec)){
+			syslog(LOG_ERR, "vec_init fail\n");
+			cleanup(&cd);
+			return -1;
+		}
 		
 		// Loop until client closes connection
 		while(!sig_received){
-			// Clear line buffer to prepare for receive
-			if(vector_init(&line_vec)){
-				syslog(LOG_ERR, "vec_init fail\n");
-				return -1;
+			received = 0;
+
+			// Call receive until we've received a newline
+			while(!(new_line = vector_find(&recv_vec, recv_vec.len - received, '\n'))){
+
+				// Perform non-blocking receive
+				do {
+					received = recv(new_fd, recv_buf, CHUNK_SIZE, 0);
+				} while (received == -1 && errno == EAGAIN);
+
+				if(received == -1) {
+					syslog(LOG_ERR, "error on syscall: recv");
+					cleanup(&cd);
+					return -1;
+				}
+				else if(received > 0){
+					if(vector_append(&recv_vec, recv_buf, received)){
+						syslog(LOG_ERR, "vec_append fail\n");
+						cleanup(&cd);
+						return -1;
+					}
+				}
+				else {
+					// Connection was terminated, follow into the if below
+					// since double break isn't well defined
+					break;
+				}
 			}
 
-			// Fill linebuffer until new line
-			rv = fill_line(new_fd, &line_vec);
-
-			if(rv < 0){
-				syslog(LOG_ERR, "fill_line fail\n");
-				return -1;
-			}
-			else if(rv == 0){
-				// Connection closed by client
+			// Connection closed by client
+			if(received == 0){
 				syslog(LOG_DEBUG, "Closed connection from %s\n", s);
-				vector_close(&line_vec);
 				break;
 			}
 
-			// Write received data to file
-			if(write(data_fd, line_vec.buf, line_vec.len) == -1){
-				syslog(LOG_ERR, "error writing data to file");
-				return -1;				
+			// Write from the receive buffer into the data file one line at a time
+			written = 0;
+			while((new_line = vector_find(&recv_vec, written, '\n'))){
+				if((rv = write(data_fd, recv_vec.buf+written, new_line + 1 - (char *)(recv_vec.buf+written))) == -1){
+					syslog(LOG_ERR, "error writing data to file");
+					cleanup(&cd);
+					return -1;				
+				}
+				written += rv;
 			}
 
-			// Clear line buff to prepare for data file read/response
-			vector_close(&line_vec);
-			if(vector_init(&line_vec)){
+			// If we have have a extra data in the receive buffer, carry it thourgh
+			// to the next packet, otherwise reset the buffer
+			if(written < recv_vec.len){
+				vector_carryover(&recv_vec, written);
+			}
+			else{
+				vector_close(&recv_vec);
+				vector_init(&recv_vec);
+			}
+
+			if(vector_init(&send_vec)){
 				syslog(LOG_ERR, "vec_init fail\n");
+				cleanup(&cd);
 				return -1;
 			}
 
 			// Seek back to start of file for read
 			if(lseek(data_fd, 0, SEEK_SET) == -1){
 				syslog(LOG_ERR, "error seeking to start of file");
+				cleanup(&cd);
 				return -1;
 			}
 
 			// Loop through chars in file
 			while(read(data_fd, &read_char, 1) == 1){
 				// Apeend each char to the line buffer
-				if(vector_append(&line_vec, &read_char, 1)){
+				if(vector_append(&send_vec, &read_char, 1)){
 					syslog(LOG_ERR, "vec_append fail\n");
+					cleanup(&cd);
 					return -1;
 				}
 
@@ -280,16 +338,18 @@ int main(int argc, char **argv) {
 				if( read_char == '\n'){
 					// Perform non-blocking send
 					do {
-						rv = send(new_fd, line_vec.buf, line_vec.len, 0);
+						rv = send(new_fd, send_vec.buf, send_vec.len, 0);
 					} while (rv == -1 && errno == EAGAIN);
 					if(rv == -1) {
 						syslog(LOG_ERR, "error on syscall: send");
+						cleanup(&cd);
 						return -1;
 					}
 
-					vector_close(&line_vec);
-					if(vector_init(&line_vec)){
+					vector_close(&send_vec);
+					if(vector_init(&send_vec)){
 						syslog(LOG_ERR, "vec_init fail\n");
+						cleanup(&cd);
 						return -1;
 					}
 					continue;
@@ -297,9 +357,10 @@ int main(int argc, char **argv) {
 			}
 
 			// clear buffer to prepare for next receive
-			vector_close(&line_vec);
+			vector_close(&send_vec);
 		}
 
+		vector_close(&recv_vec);
 		// Close client socket
 		close(new_fd);
 	}
@@ -308,8 +369,13 @@ int main(int argc, char **argv) {
 		syslog(LOG_DEBUG, "Caught signal, exiting\n");
 	}
 
-	close(data_fd);
-	closelog();
+	if (unlink(DATA_FILE) == -1) {
+		syslog(LOG_ERR, "error on syscall: unlink");
+		cleanup(&cd);
+		return -1;
+	}
+
+	cleanup(&cd);
 	return 0;
 }
 
