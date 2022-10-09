@@ -217,14 +217,11 @@ void *handle_connection(void *thread_param){
 		pthread_mutex_unlock(&data_file.mtx);
 
 		// Loop through chars in file
+		pthread_mutex_lock(&data_file.mtx);
 		while(1){
-			
-			pthread_mutex_lock(&data_file.mtx);
 			if((rv = read(data_file.fd, &read_char, 1)) != 1){
-				pthread_mutex_unlock(&data_file.mtx);
 				break;
 			}
-			pthread_mutex_unlock(&data_file.mtx);
 
 			// Apeend each char to the line buffer
 			if(vector_append(&send_vec, &read_char, 1)){
@@ -254,6 +251,7 @@ void *handle_connection(void *thread_param){
 				continue;
 			}
 		}
+		pthread_mutex_unlock(&data_file.mtx);
 
 		// clear buffer to prepare for next receive
 		vector_close(&send_vec);
