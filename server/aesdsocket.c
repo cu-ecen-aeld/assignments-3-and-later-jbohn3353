@@ -276,6 +276,7 @@ int main(int argc, char **argv) {
 	char s[INET6_ADDRSTRLEN];
 	int rv;
 	int flags;
+	int active_conns = 0;
 	pid_t pid;
 
 	// setup stuff to cleanup
@@ -465,6 +466,7 @@ int main(int argc, char **argv) {
 		SLIST_INSERT_HEAD(&head, datap, entries);
 
 		pthread_create(&datap->td.thread, NULL, handle_connection, &datap->td);
+		active_conns += 1;
 
 		SLIST_FOREACH_SAFE(datap, &head, entries, nextp){
 			if(datap->td.complete){
@@ -473,6 +475,7 @@ int main(int argc, char **argv) {
 				close(datap->td.client_fd);
 				SLIST_REMOVE(&head, datap, slist_data_s, entries);
 				free(datap);
+				active_conns -= 1;
 			}
 		}
 	}
@@ -481,12 +484,26 @@ int main(int argc, char **argv) {
 		syslog(LOG_DEBUG, "Caught signal, exiting\n");
 	}
 
+	while(active_conns > 0){
+		SLIST_FOREACH_SAFE(datap, &head, entries, nextp){
+		if(datap->td.complete){
+				pthread_join(datap->td.thread, NULL);
+				syslog(LOG_DEBUG, "Closed connection from %s\n", s);
+				close(datap->td.client_fd);
+				SLIST_REMOVE(&head, datap, slist_data_s, entries);
+				free(datap);
+				active_conns -= 1;
+			}
+		}
+	}
+
 	if (unlink(DATA_FILE) == -1) {
 		syslog(LOG_ERR, "error on syscall: unlink");
 		cleanup(&cd);
 		return -1;
 	}
 
+	timer_delete(timer);
 	cleanup(&cd);
 	return 0;
 }
