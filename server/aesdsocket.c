@@ -28,6 +28,7 @@
 #define PORT "9000"  // the port users will be connecting to
 #define DATA_FILE "/var/tmp/aesdsocketdata"
 #define TIMESTAMP_SIZE 100
+#define TIMESTAMP_INTERVAL_S 10
 #define CHUNK_SIZE 200
 
 #define BACKLOG 10	 // how many pending connections queue will hold
@@ -82,7 +83,7 @@ void *get_in_addr(struct sockaddr *sa) {
 	return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
-/// @brief Close/free all open system resources
+/// @brief Close/free all open system resources for main thread
 /// @param cd pointer to struct holding all the things to cleanup
 void cleanup(struct cleanup_data *cd){
 	freeaddrinfo(cd->servinfo);
@@ -94,6 +95,8 @@ void cleanup(struct cleanup_data *cd){
 	closelog();
 }
 
+/// @brief Close/tree all open system resources for client threads
+/// @param cd pointer to struct holding all the things to cleanup
 void thread_cleanup(struct thread_cleanup_data *cd){
 	vector_close(cd->recv_vec);
 	vector_close(cd->send_vec);
@@ -101,6 +104,9 @@ void thread_cleanup(struct thread_cleanup_data *cd){
 	cd->t_data->complete = true;
 }
 
+/// @brief function to be called every N seconds by posix timer that writes the 
+///        current timestamp to the data file
+/// @param sigval way to pass data into the function, unused
 void write_timestamp(union sigval sigval){
 	char time_string[TIMESTAMP_SIZE] = "timestamp:";
 	time_t now = time(0);
@@ -117,6 +123,10 @@ void write_timestamp(union sigval sigval){
 	pthread_mutex_unlock(&data_file.mtx);
 }
 
+/// @brief Spawned thread to handle client connections
+/// @param thread_param structure containing input and output data for the client
+///		   connection
+/// @return NULL
 void *handle_connection(void *thread_param){
 	int received, written, rv;
 	vector recv_vec, send_vec;
@@ -125,6 +135,7 @@ void *handle_connection(void *thread_param){
 	char recv_buf[CHUNK_SIZE];
 	struct thread_cleanup_data cd;
 
+	// Cast paramater as correct struct
 	struct thread_data *t_data = (struct thread_data *) thread_param;
 
 	// Set up data for easy cleanup
@@ -153,7 +164,7 @@ void *handle_connection(void *thread_param){
 				received = recv(t_data->client_fd, recv_buf, CHUNK_SIZE, 0);
 			} while (received == -1 && errno == EAGAIN);
 
-			if(received == -1) {
+			if(received < 0) {
 				syslog(LOG_ERR, "error on syscall: recv");
 				thread_cleanup(&cd);
 				return NULL;
@@ -172,6 +183,7 @@ void *handle_connection(void *thread_param){
 			}
 		}
 
+		// Will have fallen out of above loop
 		if(received == 0){
 			break;
 		}
@@ -190,7 +202,7 @@ void *handle_connection(void *thread_param){
 			written += rv;
 		}
 
-		// If we have have a extra data in the receive buffer, carry it thourgh
+		// If we have have any extra data in the receive buffer, carry it through
 		// to the next packet, otherwise reset the buffer
 		if(written < recv_vec.len){
 			vector_carryover(&recv_vec, written);
@@ -417,6 +429,7 @@ int main(int argc, char **argv) {
 		return -1;
 	}
 
+	// Intialize the timer to call write_timestamp every TIMESTAMP_INTERVAL_S seconds
 	memset(&sev, 0, sizeof(struct sigevent));
 	sev.sigev_notify = SIGEV_THREAD;
 	sev.sigev_value.sival_ptr = &data_file;
@@ -424,7 +437,7 @@ int main(int argc, char **argv) {
 	timer_create(CLOCK_REALTIME, &sev, &timer);
 
 	struct timespec sleep_time;
-	sleep_time.tv_sec = 10;
+	sleep_time.tv_sec = TIMESTAMP_INTERVAL_S;
 	sleep_time.tv_nsec = 0;
 	struct itimerspec spec;
 	spec.it_value = sleep_time;
@@ -457,15 +470,17 @@ int main(int argc, char **argv) {
 			s, sizeof(s));
 		syslog(LOG_DEBUG, "Accepted connection from %s\n", s);
 
+		// Allocate space for and add thread_data to LL
 		datap = malloc(sizeof(slist_data_t));
 		datap->td.client_fd = new_fd;
 		datap->td.complete = false;
-		
 		SLIST_INSERT_HEAD(&head, datap, entries);
 
+		// Spawn the thread for the client connection
 		pthread_create(&datap->td.thread, NULL, handle_connection, &datap->td);
 		active_conns += 1;
 
+		// Check if any threads are complete and reap/clean them up
 		SLIST_FOREACH_SAFE(datap, &head, entries, nextp){
 			if(datap->td.complete){
 				pthread_join(datap->td.thread, NULL);
@@ -482,6 +497,7 @@ int main(int argc, char **argv) {
 		syslog(LOG_DEBUG, "Caught signal, exiting\n");
 	}
 
+	// Reap remaining connections after they've finished their current packet
 	while(active_conns > 0){
 		SLIST_FOREACH_SAFE(datap, &head, entries, nextp){
 		if(datap->td.complete){
@@ -495,6 +511,7 @@ int main(int argc, char **argv) {
 		}
 	}
 
+	// Delete the data file
 	if (unlink(DATA_FILE) == -1) {
 		syslog(LOG_ERR, "error on syscall: unlink");
 		cleanup(&cd);
