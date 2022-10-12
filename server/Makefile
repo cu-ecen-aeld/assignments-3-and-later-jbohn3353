@@ -12,8 +12,17 @@ SRCS := $(shell find $(SRC_DIRS) -name '*.c')
 # As an example, hello.c turns into ./build/hello.c.o
 OBJS := $(SRCS:%=$(BUILD_DIR)/%.o)
 
-CC = $(CROSS_COMPILE)gcc
-CFLAGS = -Wall -Werror -g -O0
+ifeq ($(CC),)
+	CC = $(CROSS_COMPILE)gcc
+endif
+
+ifeq ($(CFLAGS),)
+	CFLAGS = -Wall -Werror -g -O0
+endif
+
+ifeq ($(LDFLAGS),)
+	LDFLAGS = -pthread -lrt
+endif
 
 all: $(TARGET_EXEC)
 
@@ -24,7 +33,7 @@ $(TARGET_EXEC): $(OBJS)
 # Build step for C source
 $(BUILD_DIR)/%.c.o: %.c
 	mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -c $< -o $@ $(INCLUDES)
 
 .PHONY: clean
 clean:
