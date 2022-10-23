@@ -30,10 +30,8 @@ struct aesd_dev aesd_device;
 int aesd_open(struct inode *inode, struct file *filp)
 {
     PDEBUG("open");
-    /**
-     * TODO: handle open
-     */
 
+    // save a pointer
     filp->private_data = &aesd_device;
 
     return 0;
@@ -42,9 +40,8 @@ int aesd_open(struct inode *inode, struct file *filp)
 int aesd_release(struct inode *inode, struct file *filp)
 {
     PDEBUG("release");
-    /**
-     * TODO: handle release
-     */
+
+    // didn't do anything in open, don't need to do anything in release
 
     return 0;
 }
@@ -76,6 +73,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     // If an entry isn't found, (offset too big) we've reached the end of the buffer
     // and can't read anything
     if(entry == NULL){
+        mutex_unlock(&dev->mtx);
         return 0;
     }
 
@@ -84,7 +82,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     bytes_read = min(count, entry->size - offset);
 
     // actually copy the data out
-    if(copy_to_user(buf, entry->buffptr, bytes_read)){
+    if(copy_to_user(buf, entry->buffptr+offset, bytes_read)){
         PDEBUG("failed to read data into user memory\n");
         mutex_unlock(&dev->mtx);
         return -EFAULT;
@@ -254,6 +252,10 @@ void aesd_cleanup_module(void)
         if(entry->size > 0){
             kfree(entry->buffptr);
         }
+    }
+
+    if(aesd_device.line_len > 0){
+        kfree(aesd_device.line_buf);
     }
 
     mutex_destroy(&aesd_device.mtx);
