@@ -162,7 +162,7 @@ void *handle_connection(void *thread_param){
 		thread_cleanup(&cd);
 		return NULL;
 	}
-	
+
 	// Loop until client closes connection
 	while(!sig_received){
 		received = 0;
@@ -230,19 +230,19 @@ void *handle_connection(void *thread_param){
 		}
 
 		// Seek back to start of file for read
-		pthread_mutex_unlock(&data_file.mtx);
 		#if USE_AESD_CHAR_DEVICE
 		close(data_file.fd);
-		data_file.fd = open(DATA_FILE, O_CREAT | O_RDWR | O_TRUNC,0644);
+		data_file.fd = open(DATA_FILE, O_RDWR, 0644);
 		#else
+		pthread_mutex_lock(&data_file.mtx);
 		if(lseek(data_file.fd, 0, SEEK_SET) == -1){
 			pthread_mutex_unlock(&data_file.mtx);
 			syslog(LOG_ERR, "error seeking to start of file");
 			thread_cleanup(&cd);
 			return NULL;
 		}
-		#endif
 		pthread_mutex_unlock(&data_file.mtx);
+		#endif
 
 		// Loop through chars in file
 		pthread_mutex_lock(&data_file.mtx);
@@ -254,6 +254,7 @@ void *handle_connection(void *thread_param){
 			// Apeend each char to the line buffer
 			if(vector_append(&send_vec, &read_char, 1)){
 				syslog(LOG_ERR, "vec_append fail\n");
+				pthread_mutex_unlock(&data_file.mtx);
 				thread_cleanup(&cd);
 				return NULL;
 			}
@@ -266,6 +267,7 @@ void *handle_connection(void *thread_param){
 				} while (rv == -1 && errno == EAGAIN);
 				if(rv == -1) {
 					syslog(LOG_ERR, "error on syscall: send");
+					pthread_mutex_unlock(&data_file.mtx);
 					thread_cleanup(&cd);
 					return NULL;
 				}
@@ -273,6 +275,7 @@ void *handle_connection(void *thread_param){
 				vector_close(&send_vec);
 				if(vector_init(&send_vec)){
 					syslog(LOG_ERR, "vec_init fail\n");
+					pthread_mutex_unlock(&data_file.mtx);
 					thread_cleanup(&cd);
 					return NULL;
 				}
@@ -443,6 +446,7 @@ int main(int argc, char **argv) {
 		cleanup(&cd);
 		return -1;
 	}
+	close(data_file.fd);
 
 	#if !USE_AESD_CHAR_DEVICE
 	struct sigevent sev;
@@ -496,6 +500,12 @@ int main(int argc, char **argv) {
 		datap->td.complete = false;
 		SLIST_INSERT_HEAD(&head, datap, entries);
 
+		// open the data now that someone is using it (so that the driver)
+		// can be unloaded if no one is
+		if(active_conns == 0){
+			data_file.fd = open(DATA_FILE, O_RDWR, 0644);
+		} 
+
 		// Spawn the thread for the client connection
 		pthread_create(&datap->td.thread, NULL, handle_connection, &datap->td);
 		active_conns += 1;
@@ -511,6 +521,11 @@ int main(int argc, char **argv) {
 				active_conns -= 1;
 			}
 		}
+
+		// close the data now that no one is using it
+		if(active_conns == 0){
+			close(data_file.fd);
+		} 
 	}
 
 	if(sig_received){
