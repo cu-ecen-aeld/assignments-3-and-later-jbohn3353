@@ -25,13 +25,22 @@
 #include "queue.h"
 #include "vector.h"
 
+#ifndef USE_AESD_CHAR_DEVICE
+#define USE_AESD_CHAR_DEVICE 1
+#endif
+
 #define PORT "9000"  // the port users will be connecting to
-#define DATA_FILE "/var/tmp/aesdsocketdata"
 #define TIMESTAMP_SIZE 100
 #define TIMESTAMP_INTERVAL_S 10
 #define CHUNK_SIZE 200
-
 #define BACKLOG 10	 // how many pending connections queue will hold
+
+#if USE_AESD_CHAR_DEVICE
+#define DATA_FILE "/dev/aesdchar"
+#else
+#define DATA_FILE "/var/tmp/aesdsocketdata"
+#endif
+
 
 // Struct to manage the data file across threads
 struct shared_file {
@@ -107,6 +116,7 @@ void thread_cleanup(struct thread_cleanup_data *cd){
 /// @brief function to be called every N seconds by posix timer that writes the 
 ///        current timestamp to the data file
 /// @param sigval way to pass data into the function, unused
+#if !USE_AESD_CHAR_DEVICE
 void write_timestamp(union sigval sigval){
 	char time_string[TIMESTAMP_SIZE] = "timestamp:";
 	time_t now = time(0);
@@ -122,6 +132,7 @@ void write_timestamp(union sigval sigval){
 	}
 	pthread_mutex_unlock(&data_file.mtx);
 }
+#endif
 
 /// @brief Spawned thread to handle client connections
 /// @param thread_param structure containing input and output data for the client
@@ -151,7 +162,7 @@ void *handle_connection(void *thread_param){
 		thread_cleanup(&cd);
 		return NULL;
 	}
-	
+
 	// Loop until client closes connection
 	while(!sig_received){
 		received = 0;
@@ -218,8 +229,12 @@ void *handle_connection(void *thread_param){
 			return NULL;
 		}
 
-		pthread_mutex_lock(&data_file.mtx);
 		// Seek back to start of file for read
+		#if USE_AESD_CHAR_DEVICE
+		close(data_file.fd);
+		data_file.fd = open(DATA_FILE, O_RDWR, 0644);
+		#else
+		pthread_mutex_lock(&data_file.mtx);
 		if(lseek(data_file.fd, 0, SEEK_SET) == -1){
 			pthread_mutex_unlock(&data_file.mtx);
 			syslog(LOG_ERR, "error seeking to start of file");
@@ -227,6 +242,7 @@ void *handle_connection(void *thread_param){
 			return NULL;
 		}
 		pthread_mutex_unlock(&data_file.mtx);
+		#endif
 
 		// Loop through chars in file
 		pthread_mutex_lock(&data_file.mtx);
@@ -238,6 +254,7 @@ void *handle_connection(void *thread_param){
 			// Apeend each char to the line buffer
 			if(vector_append(&send_vec, &read_char, 1)){
 				syslog(LOG_ERR, "vec_append fail\n");
+				pthread_mutex_unlock(&data_file.mtx);
 				thread_cleanup(&cd);
 				return NULL;
 			}
@@ -250,6 +267,7 @@ void *handle_connection(void *thread_param){
 				} while (rv == -1 && errno == EAGAIN);
 				if(rv == -1) {
 					syslog(LOG_ERR, "error on syscall: send");
+					pthread_mutex_unlock(&data_file.mtx);
 					thread_cleanup(&cd);
 					return NULL;
 				}
@@ -257,6 +275,7 @@ void *handle_connection(void *thread_param){
 				vector_close(&send_vec);
 				if(vector_init(&send_vec)){
 					syslog(LOG_ERR, "vec_init fail\n");
+					pthread_mutex_unlock(&data_file.mtx);
 					thread_cleanup(&cd);
 					return NULL;
 				}
@@ -269,6 +288,7 @@ void *handle_connection(void *thread_param){
 		vector_close(&send_vec);
 	}
 
+	syslog(LOG_DEBUG, "thread exit\n");
 	thread_cleanup(&cd);
 	return NULL;
 }
@@ -279,9 +299,7 @@ int main(int argc, char **argv) {
 	struct addrinfo hints, *servinfo=NULL, *p;
 	struct sockaddr_storage their_addr; // connector's address information
 	struct sigaction sa;
-	struct sigevent sev;
 	socklen_t sin_size;
-	timer_t timer;
 	int yes=1;
 	char s[INET6_ADDRSTRLEN];
 	int rv;
@@ -428,6 +446,13 @@ int main(int argc, char **argv) {
 		cleanup(&cd);
 		return -1;
 	}
+	close(data_file.fd);
+
+	#if !USE_AESD_CHAR_DEVICE
+	struct sigevent sev;
+	timer_t timer;
+	struct timespec sleep_time;
+	struct itimerspec spec;
 
 	// Intialize the timer to call write_timestamp every TIMESTAMP_INTERVAL_S seconds
 	memset(&sev, 0, sizeof(struct sigevent));
@@ -435,14 +460,13 @@ int main(int argc, char **argv) {
 	sev.sigev_value.sival_ptr = &data_file;
 	sev.sigev_notify_function = write_timestamp;
 	timer_create(CLOCK_REALTIME, &sev, &timer);
-
-	struct timespec sleep_time;
+	
 	sleep_time.tv_sec = TIMESTAMP_INTERVAL_S;
 	sleep_time.tv_nsec = 0;
-	struct itimerspec spec;
 	spec.it_value = sleep_time;
 	spec.it_interval = sleep_time;
 	timer_settime(timer, 0, &spec, NULL);
+	#endif
 
 	syslog(LOG_DEBUG, "waiting for connections...\n");
 
@@ -476,6 +500,12 @@ int main(int argc, char **argv) {
 		datap->td.complete = false;
 		SLIST_INSERT_HEAD(&head, datap, entries);
 
+		// open the data now that someone is using it (so that the driver)
+		// can be unloaded if no one is
+		if(active_conns == 0){
+			data_file.fd = open(DATA_FILE, O_RDWR, 0644);
+		} 
+
 		// Spawn the thread for the client connection
 		pthread_create(&datap->td.thread, NULL, handle_connection, &datap->td);
 		active_conns += 1;
@@ -491,6 +521,11 @@ int main(int argc, char **argv) {
 				active_conns -= 1;
 			}
 		}
+
+		// close the data now that no one is using it
+		if(active_conns == 0){
+			close(data_file.fd);
+		} 
 	}
 
 	if(sig_received){
@@ -512,6 +547,7 @@ int main(int argc, char **argv) {
 	}
 
 	// Delete the data file
+	#if !USE_AESD_CHAR_DEVICE
 	if (unlink(DATA_FILE) == -1) {
 		syslog(LOG_ERR, "error on syscall: unlink");
 		cleanup(&cd);
@@ -519,6 +555,8 @@ int main(int argc, char **argv) {
 	}
 
 	timer_delete(timer);
+	#endif
+
 	cleanup(&cd);
 	return 0;
 }
