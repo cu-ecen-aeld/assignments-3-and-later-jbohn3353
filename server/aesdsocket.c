@@ -24,6 +24,7 @@
 #include <time.h>
 #include "queue.h"
 #include "vector.h"
+#include "../aesd-char-driver/aesd_ioctl.h"
 
 #ifndef USE_AESD_CHAR_DEVICE
 #define USE_AESD_CHAR_DEVICE 1
@@ -145,6 +146,7 @@ void *handle_connection(void *thread_param){
 	char read_char;
 	char recv_buf[CHUNK_SIZE];
 	struct thread_cleanup_data cd;
+	bool seek_done;
 
 	// Cast paramater as correct struct
 	struct thread_data *t_data = (struct thread_data *) thread_param;
@@ -166,6 +168,7 @@ void *handle_connection(void *thread_param){
 	// Loop until client closes connection
 	while(!sig_received){
 		received = 0;
+		seek_done = false;
 
 		// Call receive until we've received a newline
 		while(!(new_line = vector_find(&recv_vec, recv_vec.len - received, '\n'))){
@@ -202,6 +205,30 @@ void *handle_connection(void *thread_param){
 		// Write from the receive buffer into the data file one line at a time
 		written = 0;
 		while((new_line = vector_find(&recv_vec, written, '\n'))){
+
+			// check if received line is an ioctl command
+			#if USE_AESD_CHAR_DEVICE
+			struct aesd_seekto cmd;
+			char temp_char = *(new_line + 1);
+			*(new_line+1) = '\0';
+
+			// see if we can correctly pattern match the cmd string
+			if((rv = sscanf(recv_vec.buf+written, "AESDCHAR_IOCSEEKTO:%u,%u", &cmd.write_cmd, &cmd.write_cmd_offset) == 2)){
+				
+				// send off the ioctl
+				if(ioctl(data_file.fd, AESDCHAR_IOCSEEKTO, &cmd)){
+					syslog(LOG_ERR, "ioctl failure");
+				}
+
+				// skip this write to file and note that we shouldn't close and reopen later
+				seek_done = true;
+				*(new_line+1) = temp_char;
+				continue;
+			}
+
+			*(new_line+1) = temp_char;
+			#endif
+
 			pthread_mutex_lock(&data_file.mtx);
 			if((rv = write(data_file.fd, recv_vec.buf+written, new_line + 1 - (char *)(recv_vec.buf+written))) == -1){
 				pthread_mutex_unlock(&data_file.mtx);
@@ -231,8 +258,10 @@ void *handle_connection(void *thread_param){
 
 		// Seek back to start of file for read
 		#if USE_AESD_CHAR_DEVICE
-		close(data_file.fd);
-		data_file.fd = open(DATA_FILE, O_RDWR, 0644);
+		if(!seek_done){
+			close(data_file.fd);
+			data_file.fd = open(DATA_FILE, O_RDWR, 0644);
+		}
 		#else
 		pthread_mutex_lock(&data_file.mtx);
 		if(lseek(data_file.fd, 0, SEEK_SET) == -1){
