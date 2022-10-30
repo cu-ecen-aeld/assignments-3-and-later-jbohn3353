@@ -118,7 +118,7 @@ loff_t aesd_llseek(struct file *filp, loff_t off, int whence){
 		break;
 
 	  case 2: /* SEEK_END */
-		newpos = dev->size + off;
+		newpos = dev->buf.char_size + off;
 		break;
 
 	  default: /* can't happen */
@@ -133,7 +133,7 @@ loff_t aesd_llseek(struct file *filp, loff_t off, int whence){
     }
 
     // find how far into the desired entry the pos is (returned in entry_offset)
-    aesd_circular_buffer_find_entry_offset_for_fpos(dev->buf, newpos, &entry_offset);
+    aesd_circular_buffer_find_entry_offset_for_fpos(&dev->buf, newpos, &entry_offset);
 
     mutex_unlock(&dev->mtx);
 
@@ -233,7 +233,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     return bytes_written;
 }
 
-int aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg){
+long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg){
     struct aesd_dev *dev = (struct aesd_dev *)filp->private_data;
 
     if(_IOC_TYPE(cmd) != AESD_IOC_MAGIC){
@@ -255,7 +255,7 @@ int aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg){
                 return -ERESTART;
             }
 
-            newpos = aesd_circular_buffer_find_fpos_for_entry_offset(dev->buf, kcmd.write_cmd, kcmd.write_cmd_offset);
+            newpos = aesd_circular_buffer_find_fpos_for_entry_offset(&dev->buf, kcmd.write_cmd, kcmd.write_cmd_offset);
 
             if(newpos < 0){
                 return -EINVAL;
