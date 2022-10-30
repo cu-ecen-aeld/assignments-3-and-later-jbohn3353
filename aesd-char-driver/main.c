@@ -243,7 +243,7 @@ long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg){
 
 
     switch(cmd){
-        case AESDCHAR_IOCSEEKTO:
+        case AESDCHAR_IOCSEEKTO:;
             struct aesd_seekto kcmd;
             ssize_t newpos;
 
