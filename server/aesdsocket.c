@@ -223,6 +223,7 @@ void *handle_connection(void *thread_param){
 				// skip this write to file and note that we shouldn't close and reopen later
 				seek_done = true;
 				*(new_line+1) = temp_char;
+				written += new_line + 1 - (char *)(recv_vec.buf+written);
 				continue;
 			}
 
