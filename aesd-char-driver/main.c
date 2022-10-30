@@ -101,7 +101,8 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 loff_t aesd_llseek(struct file *filp, loff_t off, int whence){
     struct aesd_dev *dev = filp->private_data;
 	loff_t newpos;
-    size_t entry_offset;
+
+    PDEBUG("seek with offset %lld and whence %d",off,whence);
 
     // lock it down
     if(mutex_lock_interruptible(&dev->mtx)){
@@ -132,13 +133,12 @@ loff_t aesd_llseek(struct file *filp, loff_t off, int whence){
         return -EINVAL;
     }
 
-    // find how far into the desired entry the pos is (returned in entry_offset)
-    aesd_circular_buffer_find_entry_offset_for_fpos(&dev->buf, newpos, &entry_offset);
+    // set the new position
+    filp->f_pos = newpos;
 
     mutex_unlock(&dev->mtx);
 
-    // find the start of that entry by subtracting the offset from the total pos
-    return newpos - entry_offset;
+    return newpos;
 }
 
 ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
@@ -240,6 +240,8 @@ long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg){
         return -EINVAL;
     }
 
+
+
     switch(cmd){
         case AESDCHAR_IOCSEEKTO:
             struct aesd_seekto kcmd;
@@ -250,6 +252,8 @@ long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg){
                 return -EFAULT;
             }
 
+            PDEBUG("ioctl seekto with entry %u and offset %u",kcmd.write_cmd,kcmd.write_cmd_offset);
+
             // lock it down
             if(mutex_lock_interruptible(&dev->mtx)){
                 return -ERESTART;
@@ -258,6 +262,7 @@ long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg){
             newpos = aesd_circular_buffer_find_fpos_for_entry_offset(&dev->buf, kcmd.write_cmd, kcmd.write_cmd_offset);
 
             if(newpos < 0){
+                mutex_unlock(&dev->mtx);
                 return -EINVAL;
             }
 
