@@ -70,10 +70,12 @@ const char *aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, 
     // handle output increase and rollover if full
     if((buffer->in_offs == buffer->out_offs) && buffer->full){
         ret = buffer->entry[buffer->out_offs].buffptr;
+        buffer->char_size -= buffer->entry[buffer->out_offs].size;
         buffer->out_offs = (buffer->out_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
     }
 
     buffer->entry[buffer->in_offs] = *add_entry;
+    buffer->char_size += add_entry->size;
 
     // handle input increase and rollover if full
     buffer->in_offs = (buffer->in_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
