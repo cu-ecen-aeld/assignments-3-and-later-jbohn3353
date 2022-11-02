@@ -11,6 +11,7 @@
 #ifdef __KERNEL__
 #include <linux/types.h>
 #else
+#include <sys/types.h>
 #include <stddef.h> // size_t
 #include <stdint.h> // uintx_t
 #include <stdbool.h>
@@ -49,10 +50,17 @@ struct aesd_circular_buffer
      * set to true when the buffer entry structure is full
      */
     bool full;
+    /**
+     * total number of bytes/chars stored in the buffer
+    */
+    size_t char_size;
 };
 
 extern struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct aesd_circular_buffer *buffer,
             size_t char_offset, size_t *entry_offset_byte_rtn );
+
+extern ssize_t aesd_circular_buffer_find_fpos_for_entry_offset(struct aesd_circular_buffer *buffer,
+            size_t entry_offset, size_t char_offset);
 
 extern const char *aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry);
 

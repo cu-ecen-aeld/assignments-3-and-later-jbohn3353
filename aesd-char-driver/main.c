@@ -19,6 +19,7 @@
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
 #include "aesdchar.h"
+#include "aesd_ioctl.h"
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
@@ -54,7 +55,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     size_t offset = 0;
     struct aesd_buffer_entry *entry;
 
-    if(buf == NULL || filp == NULL || f_pos == NULL){
+    if(buf == NULL || f_pos == NULL){
         PDEBUG("invalid pointer input to read\n");
         return -EINVAL;
     }
@@ -65,7 +66,9 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
         return 0;
     }
 
-    mutex_lock(&dev->mtx);
+    if(mutex_lock_interruptible(&dev->mtx)){
+        return -ERESTART;
+    }
 
     // find the line and offset for the desired pos
     entry = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->buf, *f_pos, &offset);
@@ -95,6 +98,49 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     return bytes_read;
 }
 
+loff_t aesd_llseek(struct file *filp, loff_t off, int whence){
+    struct aesd_dev *dev = filp->private_data;
+	loff_t newpos;
+
+    PDEBUG("seek with offset %lld and whence %d",off,whence);
+
+    // lock it down
+    if(mutex_lock_interruptible(&dev->mtx)){
+        return -ERESTART;
+    }
+
+	switch(whence) {
+	  case 0: /* SEEK_SET */
+		newpos = off;
+		break;
+
+	  case 1: /* SEEK_CUR */
+		newpos = filp->f_pos + off;
+		break;
+
+	  case 2: /* SEEK_END */
+		newpos = dev->buf.char_size + off;
+		break;
+
+	  default: /* can't happen */
+        mutex_unlock(&dev->mtx);
+		return -EINVAL;
+	}
+
+    // return if new position would be invalid (or underflow)
+    if(newpos > dev->buf.char_size){
+        mutex_unlock(&dev->mtx);
+        return -EINVAL;
+    }
+
+    // set the new position
+    filp->f_pos = newpos;
+
+    mutex_unlock(&dev->mtx);
+
+    return newpos;
+}
+
 ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
                 loff_t *f_pos)
 {
@@ -102,7 +148,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     const char *buf_to_free;
     struct aesd_dev *dev = (struct aesd_dev *)filp->private_data;
 
-    if(buf == NULL || filp == NULL || f_pos == NULL){
+    if(buf == NULL || f_pos == NULL){
         PDEBUG("invalid pointer input to write\n");
         return -EINVAL;
     }
@@ -114,7 +160,9 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     }
 
     // lock it down
-    mutex_lock(&dev->mtx);
+    if(mutex_lock_interruptible(&dev->mtx)){
+        return -ERESTART;
+    }
 
     // Allocate kernel memory for incoming data (expand or create line buf)
     if(dev->line_len){
@@ -185,12 +233,59 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     return bytes_written;
 }
 
+long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg){
+    struct aesd_dev *dev = (struct aesd_dev *)filp->private_data;
+
+    if(_IOC_TYPE(cmd) != AESD_IOC_MAGIC){
+        return -EINVAL;
+    }
+
+
+
+    switch(cmd){
+        case AESDCHAR_IOCSEEKTO:;
+            struct aesd_seekto kcmd;
+            ssize_t newpos;
+
+            // bring the command into kernel space
+            if(copy_from_user(&kcmd, (const void __user *)arg, sizeof(struct aesd_seekto))){
+                return -EFAULT;
+            }
+
+            PDEBUG("ioctl seekto with entry %u and offset %u",kcmd.write_cmd,kcmd.write_cmd_offset);
+
+            // lock it down
+            if(mutex_lock_interruptible(&dev->mtx)){
+                return -ERESTART;
+            }
+
+            newpos = aesd_circular_buffer_find_fpos_for_entry_offset(&dev->buf, kcmd.write_cmd, kcmd.write_cmd_offset);
+
+            if(newpos < 0){
+                mutex_unlock(&dev->mtx);
+                return -EINVAL;
+            }
+
+            filp->f_pos = newpos;
+
+            mutex_unlock(&dev->mtx);
+            break;
+        default:
+            return -ENOTTY;
+            break;
+    }
+
+    return 0;
+}
+
 struct file_operations aesd_fops = {
-    .owner =    THIS_MODULE,
-    .read =     aesd_read,
-    .write =    aesd_write,
-    .open =     aesd_open,
-    .release =  aesd_release,
+    .owner =            THIS_MODULE,
+    .read =             aesd_read,
+    .write =            aesd_write,
+    .llseek =           aesd_llseek,
+    .unlocked_ioctl =   aesd_ioctl,
+    .open =             aesd_open,
+    .release =          aesd_release,
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)
